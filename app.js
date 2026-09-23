@@ -2,8 +2,15 @@ const storageKey = "zfl17-film-strip-desk";
 
 const fallbackThumbs = ["#d49b35", "#347d89", "#b54d48", "#4d7656", "#6d6378"];
 
+const reactionTypes = [
+  { key: "applause", label: "掌声", icon: "👏" },
+  { key: "silence", label: "冷场", icon: "🧊" },
+  { key: "question", label: "提问", icon: "❓" }
+];
+
 const defaultState = {
   reelTitle: "春日试映A卷",
+  activeId: null,
   segments: [
     {
       id: crypto.randomUUID(),
@@ -12,7 +19,8 @@ const defaultState = {
       shift: "正常",
       damage: "完好",
       note: "开场街景，节奏平稳，适合保留原顺序。",
-      thumb: ""
+      thumb: "",
+      reactions: { applause: 0, silence: 0, question: 0 }
     },
     {
       id: crypto.randomUUID(),
@@ -21,7 +29,8 @@ const defaultState = {
       shift: "偏红",
       damage: "轻微划痕",
       note: "人物近景左侧有划痕，试映时留意是否明显。",
-      thumb: ""
+      thumb: "",
+      reactions: { applause: 0, silence: 0, question: 0 }
     },
     {
       id: crypto.randomUUID(),
@@ -30,7 +39,8 @@ const defaultState = {
       shift: "褪色",
       damage: "接片松动",
       note: "接片位置靠近段尾，放映前建议重新压平。",
-      thumb: ""
+      thumb: "",
+      reactions: { applause: 0, silence: 0, question: 0 }
     }
   ]
 };
@@ -54,14 +64,49 @@ const els = {
   totalDuration: document.querySelector("#totalDuration"),
   damageCount: document.querySelector("#damageCount"),
   segmentCount: document.querySelector("#segmentCount"),
-  exportBtn: document.querySelector("#exportBtn")
+  exportBtn: document.querySelector("#exportBtn"),
+  screeningStatus: document.querySelector("#screeningStatus"),
+  screeningStatusText: document.querySelector("#screeningStatusText"),
+  endRoundBtn: document.querySelector("#endRoundBtn"),
+  ovActive: document.querySelector("#ovActive"),
+  ovRecorded: document.querySelector("#ovRecorded"),
+  ovTotal: document.querySelector("#ovTotal"),
+  ovApplause: document.querySelector("#ovApplause"),
+  ovSilence: document.querySelector("#ovSilence"),
+  ovQuestion: document.querySelector("#ovQuestion")
 };
+
+function normalizeReactions(reactions) {
+  return {
+    applause: Number(reactions?.applause) || 0,
+    silence: Number(reactions?.silence) || 0,
+    question: Number(reactions?.question) || 0
+  };
+}
+
+function normalizeState(raw) {
+  const base = structuredClone(defaultState);
+  if (!raw || typeof raw !== "object") return base;
+  return {
+    ...base,
+    ...raw,
+    activeId: typeof raw.activeId === "string" ? raw.activeId : null,
+    segments: Array.isArray(raw.segments)
+      ? raw.segments.map((item) => ({ ...item, reactions: normalizeReactions(item.reactions) }))
+      : base.segments
+  };
+}
 
 function loadState() {
   const saved = localStorage.getItem(storageKey);
   if (!saved) return structuredClone(defaultState);
   try {
-    return { ...structuredClone(defaultState), ...JSON.parse(saved) };
+    const normalized = normalizeState(JSON.parse(saved));
+    // 放映中的片段若已不存在，自动归位为空闲
+    if (normalized.activeId && !normalized.segments.some((item) => item.id === normalized.activeId)) {
+      normalized.activeId = null;
+    }
+    return normalized;
   } catch {
     return structuredClone(defaultState);
   }
@@ -81,6 +126,10 @@ function getFilteredSegments() {
   });
 }
 
+function reactionTotal(reactions) {
+  return reactionTypes.reduce((sum, type) => sum + (reactions[type.key] || 0), 0);
+}
+
 function renderStats() {
   const total = state.segments.reduce((sum, item) => sum + Number(item.duration), 0);
   const damaged = state.segments.filter((item) => item.damage !== "完好").length;
@@ -89,15 +138,85 @@ function renderStats() {
   els.segmentCount.textContent = state.segments.length;
 }
 
+function renderOverview() {
+  const active = state.segments.find((item) => item.id === state.activeId);
+  els.screeningStatus.classList.toggle("is-live", Boolean(active));
+  if (active) {
+    const activeIndex = state.segments.findIndex((item) => item.id === active.id) + 1;
+    els.screeningStatusText.textContent = `放映中：${activeIndex}. ${active.code}`;
+    els.ovActive.textContent = active.code;
+    els.endRoundBtn.hidden = false;
+  } else {
+    els.screeningStatusText.textContent = "暂未开始放映";
+    els.ovActive.textContent = "—";
+    els.endRoundBtn.hidden = true;
+  }
+
+  const recorded = state.segments.filter((item) => reactionTotal(item.reactions) > 0);
+  const totals = reactionTypes.reduce(
+    (acc, type) => {
+      acc[type.key] = state.segments.reduce((sum, item) => sum + (item.reactions[type.key] || 0), 0);
+      return acc;
+    },
+    {}
+  );
+
+  els.ovRecorded.textContent = `${recorded.length} 段`;
+  els.ovTotal.textContent = totals.applause + totals.silence + totals.question;
+  els.ovApplause.textContent = totals.applause;
+  els.ovSilence.textContent = totals.silence;
+  els.ovQuestion.textContent = totals.question;
+}
+
+function renderReactionConsole(item, isActive) {
+  const counts = item.reactions;
+  const summary = reactionTypes
+    .map((type) => `<span class="reaction-chip ${type.key}">${type.icon} ${counts[type.key] || 0}</span>`)
+    .join("");
+
+  if (isActive) {
+    const buttons = reactionTypes
+      .map(
+        (type) =>
+          `<button type="button" class="reaction-btn ${type.key}" draggable="false" data-reaction="${item.id}:${type.key}">
+             <span class="reaction-icon">${type.icon}</span>
+             <span>${type.label}</span>
+             <b>${counts[type.key] || 0}</b>
+           </button>`
+      )
+      .join("");
+    return `
+      <div class="reaction-console is-active">
+        <div class="reaction-summary">${summary}</div>
+        <div class="reaction-buttons">${buttons}</div>
+      </div>
+    `;
+  }
+
+  const hasRecord = reactionTotal(counts) > 0;
+  const canStart = !state.activeId;
+  return `
+    <div class="reaction-console">
+      <div class="reaction-summary">
+        ${hasRecord ? summary : `<span class="reaction-empty">本轮还没有反应记录</span>`}
+      </div>
+      <button type="button" class="start-screen-btn" draggable="false" data-start="${item.id}" ${
+        canStart ? "" : "disabled"
+      } title="${canStart ? "进入放映并开始记录" : "请先结束当前放映片段"}">▶ 进入放映</button>
+    </div>
+  `;
+}
+
 function renderList() {
   const segments = getFilteredSegments();
   els.segmentList.innerHTML =
     segments
-      .map((item, index) => {
+      .map((item) => {
         const realIndex = state.segments.findIndex((segment) => segment.id === item.id);
         const hasDamage = item.damage !== "完好";
+        const isActive = item.id === state.activeId;
         return `
-          <article class="segment-card" draggable="true" data-id="${item.id}">
+          <article class="segment-card ${isActive ? "screening" : ""}" draggable="true" data-id="${item.id}">
             <div class="thumb">
               ${
                 item.thumb
@@ -109,12 +228,14 @@ function renderList() {
               <div class="segment-title">
                 <strong>${realIndex + 1}. ${escapeHtml(item.code)}</strong>
                 <span>${formatDuration(item.duration)}</span>
+                ${isActive ? `<span class="on-air-badge"><i class="live-dot"></i>放映中</span>` : ""}
               </div>
               <div class="tag-row">
                 <span class="tag">${escapeHtml(item.shift)}</span>
                 <span class="tag ${hasDamage ? "damage" : "ok"}">${escapeHtml(item.damage)}</span>
               </div>
               <p class="segment-note">${escapeHtml(item.note || "没有备注。")}</p>
+              ${renderReactionConsole(item, isActive)}
             </div>
             <div class="segment-actions">
               <button type="button" title="上移" data-move-up="${item.id}">↑</button>
@@ -148,6 +269,7 @@ function renderAll() {
   saveState();
   els.reelTitle.value = state.reelTitle;
   renderStats();
+  renderOverview();
   renderList();
   renderWarnings();
 }
@@ -182,7 +304,8 @@ async function addSegment(event) {
     shift: els.shiftInput.value,
     damage: els.damageInput.value,
     note: els.noteInput.value.trim(),
-    thumb
+    thumb,
+    reactions: { applause: 0, silence: 0, question: 0 }
   });
   els.segmentForm.reset();
   els.durationInput.value = 12;
@@ -198,12 +321,43 @@ function moveSegment(id, direction) {
   renderAll();
 }
 
+function deleteSegment(id) {
+  state.segments = state.segments.filter((item) => item.id !== id);
+  // 移除片段时，相关反应记录随片段一起清掉；若删的正是放映中的片段，这一轮一并结束
+  if (state.activeId === id) state.activeId = null;
+  renderAll();
+}
+
+function startScreening(id) {
+  // 同一时刻只允许一段处于放映中，换段前必须先结束当前这一轮
+  if (state.activeId) return;
+  if (!state.segments.some((item) => item.id === id)) return;
+  state.activeId = id;
+  renderAll();
+}
+
+function endRound() {
+  state.activeId = null;
+  renderAll();
+}
+
+function addReaction(id, key) {
+  if (state.activeId !== id) return;
+  const segment = state.segments.find((item) => item.id === id);
+  if (!segment || !reactionTypes.some((type) => type.key === key)) return;
+  segment.reactions[key] = (segment.reactions[key] || 0) + 1;
+  renderAll();
+}
+
 function exportList() {
   const lines = [
     `胶片卷：${state.reelTitle || "未命名胶片卷"}`,
     `总时长：${formatDuration(state.segments.reduce((sum, item) => sum + Number(item.duration), 0))}`,
     "",
-    ...state.segments.map((item, index) => `${index + 1}. ${item.code}｜${formatDuration(item.duration)}｜${item.shift}｜${item.damage}｜${item.note || "无备注"}`)
+    ...state.segments.map((item, index) => {
+      const reactions = reactionTypes.map((type) => `${type.label} ${item.reactions[type.key] || 0}`).join("、");
+      return `${index + 1}. ${item.code}｜${formatDuration(item.duration)}｜${item.shift}｜${item.damage}｜反应：${reactions}｜${item.note || "无备注"}`;
+    })
   ];
   const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
   const link = document.createElement("a");
@@ -230,17 +384,26 @@ els.colorFilter.addEventListener("change", renderList);
 els.searchInput.addEventListener("input", renderList);
 els.segmentForm.addEventListener("submit", addSegment);
 els.exportBtn.addEventListener("click", exportList);
+els.endRoundBtn.addEventListener("click", endRound);
 
 els.segmentList.addEventListener("click", (event) => {
+  const reaction = event.target.closest("[data-reaction]");
+  const start = event.target.closest("[data-start]");
   const up = event.target.closest("[data-move-up]");
   const down = event.target.closest("[data-move-down]");
   const remove = event.target.closest("[data-delete]");
+  if (reaction) {
+    const [id, key] = reaction.dataset.reaction.split(":");
+    addReaction(id, key);
+    return;
+  }
+  if (start) {
+    startScreening(start.dataset.start);
+    return;
+  }
   if (up) moveSegment(up.dataset.moveUp, -1);
   if (down) moveSegment(down.dataset.moveDown, 1);
-  if (remove) {
-    state.segments = state.segments.filter((item) => item.id !== remove.dataset.delete);
-    renderAll();
-  }
+  if (remove) deleteSegment(remove.dataset.delete);
 });
 
 els.segmentList.addEventListener("dragstart", (event) => {

@@ -52,6 +52,36 @@
         <button id="exportBtn">导出清单</button>
       </section>
 
+      <section class="screening-panel panel">
+        <div class="screening-title">
+          <h2>现场反应总览</h2>
+          <span id="screeningStatus" class="screening-status">
+            <i class="live-dot"></i>
+            <span id="screeningStatusText">暂未开始放映</span>
+            <button id="endRoundBtn" class="end-round-mini" type="button" hidden>结束本轮</button>
+          </span>
+        </div>
+        <div class="screening-stats">
+          <div class="screen-stat">
+            <span>正在放映</span>
+            <strong id="ovActive">—</strong>
+          </div>
+          <div class="screen-stat">
+            <span>已记录片段</span>
+            <strong id="ovRecorded">0 段</strong>
+          </div>
+          <div class="screen-stat">
+            <span>反应总数</span>
+            <strong id="ovTotal">0</strong>
+            <div class="reaction-breakdown">
+              <span class="applause">👏 掌声 <b id="ovApplause">0</b></span>
+              <span class="silence">🧊 冷场 <b id="ovSilence">0</b></span>
+              <span class="question">❓ 提问 <b id="ovQuestion">0</b></span>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <section class="layout">
         <aside class="panel">
           <h2>录入片段</h2>
