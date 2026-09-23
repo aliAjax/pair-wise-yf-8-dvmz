@@ -2,8 +2,19 @@ const storageKey = "zfl17-film-strip-desk";
 
 const fallbackThumbs = ["#d49b35", "#347d89", "#b54d48", "#4d7656", "#6d6378"];
 
+const REACTION_TYPES = [
+  { key: "applause", label: "掌声" },
+  { key: "silence", label: "冷场" },
+  { key: "question", label: "提问" }
+];
+
+function emptyReactions() {
+  return { applause: 0, silence: 0, question: 0 };
+}
+
 const defaultState = {
   reelTitle: "春日试映A卷",
+  screeningId: null,
   segments: [
     {
       id: crypto.randomUUID(),
@@ -12,7 +23,8 @@ const defaultState = {
       shift: "正常",
       damage: "完好",
       note: "开场街景，节奏平稳，适合保留原顺序。",
-      thumb: ""
+      thumb: "",
+      reactions: emptyReactions()
     },
     {
       id: crypto.randomUUID(),
@@ -21,7 +33,8 @@ const defaultState = {
       shift: "偏红",
       damage: "轻微划痕",
       note: "人物近景左侧有划痕，试映时留意是否明显。",
-      thumb: ""
+      thumb: "",
+      reactions: emptyReactions()
     },
     {
       id: crypto.randomUUID(),
@@ -30,7 +43,8 @@ const defaultState = {
       shift: "褪色",
       damage: "接片松动",
       note: "接片位置靠近段尾，放映前建议重新压平。",
-      thumb: ""
+      thumb: "",
+      reactions: emptyReactions()
     }
   ]
 };
@@ -54,6 +68,9 @@ const els = {
   totalDuration: document.querySelector("#totalDuration"),
   damageCount: document.querySelector("#damageCount"),
   segmentCount: document.querySelector("#segmentCount"),
+  screeningNow: document.querySelector("#screeningNow"),
+  recordedCount: document.querySelector("#recordedCount"),
+  reactionTotal: document.querySelector("#reactionTotal"),
   exportBtn: document.querySelector("#exportBtn")
 };
 
@@ -61,10 +78,21 @@ function loadState() {
   const saved = localStorage.getItem(storageKey);
   if (!saved) return structuredClone(defaultState);
   try {
-    return { ...structuredClone(defaultState), ...JSON.parse(saved) };
+    return normalizeState({ ...structuredClone(defaultState), ...JSON.parse(saved) });
   } catch {
     return structuredClone(defaultState);
   }
+}
+
+function normalizeState(raw) {
+  raw.segments = raw.segments.map((segment) => ({
+    ...segment,
+    reactions: { ...emptyReactions(), ...(segment.reactions || {}) }
+  }));
+  if (!raw.segments.some((segment) => segment.id === raw.screeningId)) {
+    raw.screeningId = null;
+  }
+  return raw;
 }
 
 function saveState() {
@@ -81,12 +109,21 @@ function getFilteredSegments() {
   });
 }
 
+function reactionTotalOf(item) {
+  return REACTION_TYPES.reduce((sum, type) => sum + (Number(item.reactions?.[type.key]) || 0), 0);
+}
+
 function renderStats() {
   const total = state.segments.reduce((sum, item) => sum + Number(item.duration), 0);
   const damaged = state.segments.filter((item) => item.damage !== "完好").length;
+  const screening = state.segments.find((item) => item.id === state.screeningId);
   els.totalDuration.textContent = formatDuration(total);
   els.damageCount.textContent = damaged;
   els.segmentCount.textContent = state.segments.length;
+  els.screeningNow.textContent = screening ? screening.code : "—";
+  els.screeningNow.classList.toggle("live", Boolean(screening));
+  els.recordedCount.textContent = state.segments.filter((item) => reactionTotalOf(item) > 0).length;
+  els.reactionTotal.textContent = state.segments.reduce((sum, item) => sum + reactionTotalOf(item), 0);
 }
 
 function renderList() {
@@ -96,8 +133,25 @@ function renderList() {
       .map((item, index) => {
         const realIndex = state.segments.findIndex((segment) => segment.id === item.id);
         const hasDamage = item.damage !== "完好";
+        const isScreening = state.screeningId === item.id;
+        const reactionButtons = REACTION_TYPES.map(
+          (type) => `
+            <button type="button" class="reaction-btn ${type.key}" data-react="${type.key}" data-id="${item.id}">
+              ${type.label} <strong>${item.reactions[type.key]}</strong>
+            </button>`
+        ).join("");
+        const reactionChips = REACTION_TYPES.map(
+          (type) => `<span class="chip ${type.key}">${type.label} ${item.reactions[type.key]}</span>`
+        ).join("");
+        const reactionRow = isScreening
+          ? `<span class="live-badge">放映中</span>${reactionButtons}
+             <button type="button" class="end-btn" data-end="${item.id}">结束本轮</button>`
+          : `<button type="button" class="start-btn" data-start="${item.id}" ${
+              state.screeningId ? 'disabled title="先结束当前放映的片段"' : 'title="进入放映，现场记录观众反应"'
+            }>开始放映</button>
+             ${reactionTotalOf(item) > 0 ? `<span class="reaction-chips">${reactionChips}</span>` : ""}`;
         return `
-          <article class="segment-card" draggable="true" data-id="${item.id}">
+          <article class="segment-card ${isScreening ? "screening" : ""}" draggable="true" data-id="${item.id}">
             <div class="thumb">
               ${
                 item.thumb
@@ -115,6 +169,7 @@ function renderList() {
                 <span class="tag ${hasDamage ? "damage" : "ok"}">${escapeHtml(item.damage)}</span>
               </div>
               <p class="segment-note">${escapeHtml(item.note || "没有备注。")}</p>
+              <div class="reaction-row">${reactionRow}</div>
             </div>
             <div class="segment-actions">
               <button type="button" title="上移" data-move-up="${item.id}">↑</button>
@@ -182,7 +237,8 @@ async function addSegment(event) {
     shift: els.shiftInput.value,
     damage: els.damageInput.value,
     note: els.noteInput.value.trim(),
-    thumb
+    thumb,
+    reactions: emptyReactions()
   });
   els.segmentForm.reset();
   els.durationInput.value = 12;
@@ -198,12 +254,45 @@ function moveSegment(id, direction) {
   renderAll();
 }
 
+function startScreening(id) {
+  if (state.screeningId) return;
+  if (!state.segments.some((item) => item.id === id)) return;
+  state.screeningId = id;
+  renderAll();
+}
+
+function endScreening() {
+  state.screeningId = null;
+  renderAll();
+}
+
+function addReaction(id, type) {
+  if (state.screeningId !== id) return;
+  const segment = state.segments.find((item) => item.id === id);
+  if (!segment || !(type in segment.reactions)) return;
+  segment.reactions[type] += 1;
+  renderAll();
+}
+
+function removeSegment(id) {
+  state.segments = state.segments.filter((item) => item.id !== id);
+  if (state.screeningId === id) state.screeningId = null;
+  renderAll();
+}
+
 function exportList() {
+  const totals = Object.fromEntries(
+    REACTION_TYPES.map((type) => [type.key, state.segments.reduce((sum, item) => sum + item.reactions[type.key], 0)])
+  );
   const lines = [
     `胶片卷：${state.reelTitle || "未命名胶片卷"}`,
     `总时长：${formatDuration(state.segments.reduce((sum, item) => sum + Number(item.duration), 0))}`,
+    `现场反应：掌声${totals.applause}｜冷场${totals.silence}｜提问${totals.question}`,
     "",
-    ...state.segments.map((item, index) => `${index + 1}. ${item.code}｜${formatDuration(item.duration)}｜${item.shift}｜${item.damage}｜${item.note || "无备注"}`)
+    ...state.segments.map((item, index) => {
+      const reactions = reactionTotalOf(item) > 0 ? `｜掌声${item.reactions.applause} 冷场${item.reactions.silence} 提问${item.reactions.question}` : "";
+      return `${index + 1}. ${item.code}｜${formatDuration(item.duration)}｜${item.shift}｜${item.damage}｜${item.note || "无备注"}${reactions}`;
+    })
   ];
   const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
   const link = document.createElement("a");
@@ -235,12 +324,15 @@ els.segmentList.addEventListener("click", (event) => {
   const up = event.target.closest("[data-move-up]");
   const down = event.target.closest("[data-move-down]");
   const remove = event.target.closest("[data-delete]");
+  const start = event.target.closest("[data-start]");
+  const end = event.target.closest("[data-end]");
+  const react = event.target.closest("[data-react]");
   if (up) moveSegment(up.dataset.moveUp, -1);
   if (down) moveSegment(down.dataset.moveDown, 1);
-  if (remove) {
-    state.segments = state.segments.filter((item) => item.id !== remove.dataset.delete);
-    renderAll();
-  }
+  if (remove) removeSegment(remove.dataset.delete);
+  if (start) startScreening(start.dataset.start);
+  if (end) endScreening();
+  if (react) addReaction(react.dataset.id, react.dataset.react);
 });
 
 els.segmentList.addEventListener("dragstart", (event) => {
